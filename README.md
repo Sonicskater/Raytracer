@@ -1,34 +1,35 @@
 ## README.md
 
-### Simple Lambertian Ray tracer with shadows and plane 
+Based on TA provided Code
 
-Author: Andrew R. Owens
-Date: Nov 3, 2019
-Copyright (2019)
+program was modified to be mroe object oriented and used inheritance to simplify behaviour.
 
-## Description
+e.g. triangles are children of planes and use their intersection code for before checking if the  resultant intersection is withiin the tri.
 
-Simple ray tracer, use what ever you want from this... cheers.
+I decided to genreate 1 complicated scene.
+This scene contains 4 reflective sphers, 1 matte sphere, 1 reflective triangle and 1 reflective infinite plane.
 
-The project now includes its own version of glad AND glfw that need to be
-compiled with project. This should happen automatically with any of the options
-below for installation.
+I rendered it from 6 different directions, to demonstrate different shadows and reflections.
 
-## Configure
+For instance, the sphere in the center of 1-4 has a hard line shadow cast from the green triangle up and behind the camera.
 
-### Unix makefile (Tested)
-	cmake -H. -Bbuild
+I also increased the reflectivenss of the scene for 1-recursive.png in order to better show the recursive reflections of the scene.
+Further done to make it even more apparent in 1-extra-recursive.png
 
-### Mac OSX (Tested)
-	cmake -H. -Bbuild -G "Xcode"
+All objects in the scene use the same reflection ratio, If reflection is enabled. This is the case for all objects except for the dark red sphere.
 
-### Microsoft Windows (Tested)
-	cmake -H. -Bbuild -G "Visual Studio 15"
+The program can bbe run from command line with ./RayTracing_Simple <width> <height> in pixels, or with no args for 1000*1000.
 
-or
+## Compilation ##
+navigate to the source directory, with CMakeLists.txt
 
-	cmake -H. -Bbuild -G "Visual Studio 15 Win64"
+Run:
+cmake ./
+make
 
-## USAGE
+The build will be located in the source directory on linux, or 
+potentially in out/build/<target> if compiled on windows depending on your visual studio settings. 
 
-	build/RayTracing_Simple
+
+## Other ##
+Developed on WSL-Based Ubuntu using visual studio, and using the bash command line to make sure it is linux compatible c++.

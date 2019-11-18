@@ -17,7 +17,7 @@
 #include <random>
 
 #include "mat3f.hpp"
-#include "triangle.hpp"
+
 #include "vec3f.hpp"
 #include "vec2f.hpp"
 #include "image.hpp"
@@ -27,12 +27,17 @@
 #include "sphere.hpp"
 #include "plane.hpp"
 #include "ray.hpp"
-#include "ray_intersect.hpp"
-
+#include <memory>
+#include "light.hpp"
+#include "render_triangle.hpp"
 // only do this kinda stuff in main.cpp or *.cpp; never *.h
 using namespace math;
 using namespace geometry;
 using namespace std;
+
+namespace math {
+	float distance(Vec2f const& a, Vec2f const& b) { return norm(b - a); }
+}
 
 namespace raytracing {
 
@@ -45,29 +50,6 @@ Vec3f normalAt(Vec3f const & /*p*/, Plane const &p) {
   return p.normal;
 }
 
-struct Surface {
-  virtual ~Surface() = default;
-  virtual Hit intersectSelf(Ray const &ray) const = 0;
-  virtual Vec3f normalAtSelf(Vec3f const &p) const = 0;
-};
-
-// helper class/function to make, e.g., class Sphere : public Surface
-// Wrapping the geometry (e.g., sphere) in a class for intersection
-// does not 'pollute' the geometry with inheritence
-template <class T> struct Intersect_ : public Surface {
-  template <typename... Args>
-  Intersect_(Args... args)
-      : m_self(std::forward<Args>(args)...) {}
-
-  Hit intersectSelf(Ray const &ray) const { return intersect(ray, m_self); }
-  Vec3f normalAtSelf(Vec3f const &p) const { return normalAt(p, m_self); }
-
-  T m_self;
-};
-
-template <typename T> std::unique_ptr<Intersect_<T>> makeIntersectable(T t) {
-  return std::unique_ptr<Intersect_<T>>(new Intersect_<T>(t));
-}
 
 struct ImagePlane {
   using Screen = geometry::Grid2<raster::RGB>;
@@ -135,105 +117,199 @@ ImagePlane makeImagePlane(Vec3f const &eye, Vec3f const &lookatPosition,
   return imagePlane;
 }
 
-using s_ptr = std::unique_ptr<Surface>;
 
-Vec3f castRay(Ray ray,
-              math::Vec3f eye,                    //
-              math::Vec3f light,                  //
-              std::vector<s_ptr> const &surfaces) {
-
-  constexpr float ambientIntensity = 0.1f;
-
-  // background color
-  Vec3f colorOut(0.1f, 0.1f, 0.1f);
-
-  // find closed object, if any
-  Hit closest;
-  // pointer to closest object
-  Surface const *surface = nullptr;
-  for (auto const &s : surfaces) {
-    auto hit = s->intersectSelf(ray);
-    if (hit && (hit.rayDepth < closest.rayDepth)) {
-      closest = hit;
-      surface = s.get();
-    }
-  }
-
-  // if hit get point
-  if (surface != nullptr) {
-	  //TODO
-		colorOut = Vec3f(0.f,0.f,1.f);
-  }
-  return colorOut;
+Vec3f Reflect(Vec3f &n, Vec3f &i) {
+	return i - 2 * (i * n) * n;
 }
 
-void render(ImagePlane &imagePlane, //
-            math::Vec3f eye,        // all below could be in 'scene' object
-            math::Vec3f light,      //
-            std::vector<s_ptr> const &surfaces) {
+Vec3f castRay(Ray ray,
+	math::Vec3f eye,                    //
+	std::vector<Light> const& lights,//
+	std::vector<std::unique_ptr<RenderObject>> const& objects) {
 
-  // Standard mersenne_twister_engine seeded
-  thread_local std::mt19937 gen(0);
-  auto sampleRange = [](float a, float b) {
-    using distrubution = std::uniform_real_distribution<>;
-    return distrubution(a, b)(gen);
-  };
+	constexpr float ambientIntensity = 0.15f;
 
-  // question? if I switch the order here of rows vs. coloumns is it faster?
-  // slower? why?
-  for (int32_t y = 0; y < imagePlane.screen.height(); ++y) {
-    for (int32_t x = 0; x < imagePlane.screen.width(); ++x) {
+	// background color
+	Vec3f colorOut(0.1f, 0.1f, 0.1f);
+	Vec3f nextColor(0.f, 0.f, 0.f);
+	Vec3f selfColor(0.f, 0.f, 0.f);
 
-      math::Vec2f pixel(x, y);
-      auto pixel3D = imagePlane.pixelTo3D(pixel);
-      auto direction = normalized(pixel3D - eye);
-      auto bias = 1e-4f;
-      auto p = pointOnLne(eye, direction, bias);
-      Ray r(p, direction);
+	// find closed object, if any
+	Intersection closest;
+	Vec3f lightDir;
+	// pointer to closest object
+	for (auto const& s : objects) {
+		auto hit = s->intersection(ray);
+		if (hit && (hit.rayDepth < closest.rayDepth)) {
+			
+			closest = hit;
+		}
+	}
 
-      auto colorOut = castRay(r, eye, light, surfaces);
+	// if hit get point
+	if (closest) {
+		//phong shading
 
-      // correct to quantiezed error
-      // (i.e., removes banded aliasing when converting to 8bit RGB)
-      constexpr float halfStep = 1.f / 512;
-      colorOut = raster::quantizedErrorCorrection(
-          colorOut, sampleRange(-halfStep, halfStep));
+		float diffuse = 0, specular = 0;
+		for (auto const& l : lights) {
+			lightDir = (l.location - closest.location).normalize();
 
-      imagePlane.screen({x, y}) = raster::convertToRGB(colorOut);
-    }
-  }
+			Ray shadowRay = Ray(closest.location, lightDir);
+			Intersection hit;
+			for (auto const& s : objects) {
+				hit = s->intersection(shadowRay);
+				if (hit) {
+					break;
+				}
+			}
+			if (!hit) {
+
+				diffuse += 0.3 * std::max(0.f, closest.normal * lightDir);
+
+				Vec3f incident = -1 * lightDir;
+				Vec3f reflected = Reflect(closest.normal, incident);
+
+				specular += 0.5 * std::pow(std::max(0.f, reflected * (-1 * ray.direction)), 4);
+			}
+		}
+		selfColor = closest.color * (diffuse + ambientIntensity) + Vec3f(1, 1, 1) * specular;
+		if (closest.continues) {
+
+			nextColor = castRay(Ray(closest.location, Reflect(closest.normal, ray.direction)), eye, lights, objects);
+			
+			//controls contribution of reflected light to final color. Higher = more reflective, must be less than 0 <x <1
+			float reflective_mix = 0.75;
+			colorOut = nextColor*reflective_mix + selfColor * (1-reflective_mix);
+		}
+		else {
+			colorOut = selfColor;
+		}
+
+		
+	}
+	return colorOut;
+}
+
+void render(ImagePlane& imagePlane, //
+	math::Vec3f eye,        // all below could be in 'scene' object
+	std::vector<Light> const& lights,     //
+	std::vector<std::unique_ptr<RenderObject>> const& surfaces) {
+
+	// Standard mersenne_twister_engine seeded
+	thread_local std::mt19937 gen(0);
+	auto sampleRange = [](float a, float b) {
+		using distrubution = std::uniform_real_distribution<>;
+		return distrubution(a, b)(gen);
+	};
+
+	// question? if I switch the order here of rows vs. coloumns is it faster?
+	// slower? why?
+	for (int32_t y = 0; y < imagePlane.screen.height(); ++y) {
+		for (int32_t x = 0; x < imagePlane.screen.width(); ++x) {
+
+			math::Vec2f pixel(x, y);
+			auto pixel3D = imagePlane.pixelTo3D(pixel);
+			auto direction = normalized(pixel3D - eye);
+			auto bias = 1e-4f;
+			auto p = pointOnLne(eye, direction, bias);
+			Ray r(p, direction);
+
+			auto colorOut = castRay(r, eye, lights, surfaces);
+
+			// correct to quantiezed error
+			// (i.e., removes banded aliasing when converting to 8bit RGB)
+			constexpr float halfStep = 1.f / 512;
+			colorOut = raster::quantizedErrorCorrection(
+				colorOut, sampleRange(-halfStep, halfStep));
+
+			imagePlane.screen({ x, y }) = raster::convertToRGB(colorOut);
+		}
+	}
 }
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+
   // setup camera and imagePlane
   Vec3f light{20, 15, 10};
-  Vec3f eye{0.f, 5.f, 10.f};
+
+  // perspectives
+  //Vec3f eye{20.f, 0.f,-30.f};
+  //Vec3f eye{ 0.f,10.f,10.f };
+  //Vec3f eye{ 0.f,10.f,-30.f };
+  //Vec3f eye{ 10.f,0.f,0.f };
+  //Vec3f eye{ 30.f,30.f,0.f };
+  Vec3f eye{ 0.f,0.f,10.f };
+
   Vec3f lookat{0.f, 0.f, 0.f};
+  //Vec3f lookat{0.f, -4.8f, 0.f};
   Vec3f up{0.f, 1.f, 0.f};
   int resolutionX = 1000;
   int resolutionY = 1000;
   float planeWidth = 50.f;
   float planeHeight = 50.f;
   float focalDist = 50.f;
+  if (argc == 3) {
+	  resolutionX = stoi(argv[1]);
+	  resolutionY = stoi(argv[2]);
+	  if (resolutionY < resolutionX) {
+
+		  planeWidth = planeHeight * (resolutionX / resolutionY);
+	  }
+	  else {
+
+		  planeHeight = planeWidth * (resolutionY / resolutionX);
+	  }
+  }
+  std::vector<Light> lights = vector<Light>();
 
   using namespace raytracing;
-
+  using namespace std;
   auto imagePlane = makeImagePlane(eye, lookat, up,          //
                                    resolutionX, resolutionY, //
                                    planeWidth, planeHeight,  //
                                    focalDist);
-
+  
+  lights.push_back(Light(light));
+  //lights.push_back(Light({-20,15,10}));
+  lights.push_back(Light({ 0,15,0 }));
   // setup scene
-  std::vector<s_ptr> surfaces;
-
+  vector<unique_ptr<RenderObject>> objects;
   Plane p;
-  surfaces.push_back(makeIntersectable(p));
+  //surfaces.push_back(makeIntersectable(p));
+  //auto f = std::unique_ptr<RenderObject>(new Plane (std::move(p)));
+  auto f = unique_ptr<RenderObject>(new Sphere({ -1.f,0.f,0.f }, 1.f));
+  objects.push_back(move(f));
 
+  f = unique_ptr<RenderObject>(new Sphere({ 2.f,3.f,-2.f }, 1.f, { .3f,.3f,0.f }, true));
+  objects.push_back(move(f));
+
+  f = unique_ptr<RenderObject>(new RenderTriangle({ 0,9,-13 }, { 5,5,7 }, { 5,0,-13 },  { 0, 0.5f, 0 }, true));
+  objects.push_back(move(f));
+
+  f = unique_ptr<RenderObject>(new Sphere({ 6.f, 0.f, -5.f }, 2.f, {0.f,.3f,0.f}, true));
+  objects.push_back(move(f));
+
+  f = unique_ptr<RenderObject>(new Sphere({ -2.f, 1.f, -9.f }, 5.f, { 0.f,.3f,.3f }, true));
+  objects.push_back(move(f));
+
+  f = unique_ptr<RenderObject>(new Sphere({ -2.f, -3.8f, -13.f }, 1.f, { 1.f,1.f,0.f }, true));
+  objects.push_back(move(f));
+
+  f = unique_ptr<RenderObject>(new Plane({ 0.f,1.f,0.f }, { 0.f, -5.f, 0.f }, {.3f,0.f,.3f}, true));
+  objects.push_back(move(f));
+
+  //Sphere s = Sphere({ 0.f,0.f,0.f }, 1.f);
+  //surfaces.push_back(makeIntersectable(s));
+  //surfaces.push_back(makeIntersectable(new RedSphere({ 0.f, 0.f, 0.f }, 1.f)));
+  //surfaces.push_back(makeIntersectable(new BlueSphere({ 1.f, 1.f, -0.5f }, 1.f)));
+  //surfaces.push_back(makeIntersectable(new RedSphere({ 1.f, 0.f, -1.f }, 2.f)));
+  //surfaces.push_back(makeIntersectable(new BlueSphere({ -2.f, 0.f, -2.f }, 5.f)));
   // render that thing...
   temporal::Timer timer(true);
 
-  render(imagePlane, eye, light, surfaces);
+  //renderOld(imagePlane, eye, light, surfaces);
+  render(imagePlane, eye, lights, objects);
 
   std::cout << "Time elapsed: " << std::fixed << timer.minutes() << " min.\n";
 
