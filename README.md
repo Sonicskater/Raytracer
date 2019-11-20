@@ -33,3 +33,7 @@ potentially in out/build/<target> if compiled on windows depending on your visua
 
 ## Other ##
 Developed on WSL-Based Ubuntu using visual studio, and using the bash command line to make sure it is linux compatible c++.
+
+tested on main lab machines
+
+pics are dark due to my error, were brighter on home monitors.
